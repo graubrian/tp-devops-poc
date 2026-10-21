@@ -26,9 +26,14 @@ describe('API (e2e)', () => {
     return request(app.getHttpServer())
       .get('/health')
       .expect(200)
-      .expect((res) =>
-        expect((res.body as { status: string }).status).toBe('ok'),
-      );
+      .expect((res) => {
+        const body = res.body as {
+          status: string;
+          info: Record<string, { status: string }>;
+        };
+        expect(body.status).toBe('ok');
+        expect(body.info.memoria_heap.status).toBe('up');
+      });
   });
 
   it('expone la documentación de Swagger', async () => {
