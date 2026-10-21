@@ -1,0 +1,34 @@
+services:
+  # Entorno de desarrollo: `docker compose up`
+  api:
+    build:
+      context: .
+      target: dev
+    ports:
+      - '3000:3000'
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PORT: 3000
+      APP_ENV: local
+    volumes:
+      # solo el código fuente: node_modules queda el de la imagen
+      - ./src:/app/src
+      - ./test:/app/test
+    restart: unless-stopped
+
+  # Misma imagen que se publica en Docker Hub: `docker compose --profile prod up api-prod`
+  api-prod:
+    profiles: [prod]
+    build:
+      context: .
+      target: prod
+    ports:
+      - '3001:3000'
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      APP_ENV: local-prod
+    restart: unless-stopped
