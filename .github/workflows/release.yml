@@ -13,6 +13,9 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  IMAGEN: docker.io/${{ vars.DOCKERHUB_USERNAME }}/tp-devops-poc
+
 jobs:
   # Mismo CI que en los PRs: si algo falla acá, no se publica nada
   ci:
@@ -57,7 +60,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: docker.io/${{ vars.DOCKERHUB_USERNAME }}/tp-devops-api
+          images: ${{ env.IMAGEN }}
           flavor: latest=false
           tags: |
             type=semver,pattern={{version}},value=v${{ needs.version.outputs.version }}
@@ -84,12 +87,12 @@ jobs:
       - name: Disparar deploy hook
         env:
           HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
-          IMAGEN: docker.io/${{ vars.DOCKERHUB_USERNAME }}/tp-devops-api:${{ needs.version.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           if [ -z "$HOOK" ]; then
             echo "::warning::Falta el secreto RENDER_DEPLOY_HOOK_URL, no se despliega"
             exit 0
           fi
-          IMG_URL=$(jq -rn --arg v "$IMAGEN" '$v|@uri')
+          IMG_URL=$(jq -rn --arg v "$IMAGEN:$VERSION" '$v|@uri')
           curl --fail --silent --show-error -X POST "${HOOK}&imgURL=${IMG_URL}"
-          echo "Deploy pedido para $IMAGEN"
+          echo "Deploy pedido para $IMAGEN:$VERSION"
