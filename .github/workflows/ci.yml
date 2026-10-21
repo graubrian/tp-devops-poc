@@ -1,6 +1,8 @@
 name: CI
 
 on:
+  # el workflow de release lo reutiliza antes de publicar la imagen
+  workflow_call:
   pull_request:
     branches: [main]
   push:
@@ -8,7 +10,7 @@ on:
 
 # si llega un push nuevo al mismo PR, se cancela la corrida anterior
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
