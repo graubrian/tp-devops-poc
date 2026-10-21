@@ -81,4 +81,12 @@ describe('API (e2e)', () => {
     expect(res.text).toContain('status_code="404"');
     expect(res.text).toContain('http_request_duration_seconds_bucket');
   });
+
+  it('agrupa las rutas inexistentes en un solo label', async () => {
+    await request(app.getHttpServer()).get('/no-existe').expect(404);
+    const res = await request(app.getHttpServer()).get('/metrics').expect(200);
+
+    expect(res.text).toContain('route="no_encontrada"');
+    expect(res.text).not.toContain('splat');
+  });
 });
