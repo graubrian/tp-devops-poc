@@ -4,6 +4,7 @@ import { LoggerModule } from 'nestjs-pino';
 import { HealthModule } from './health/health.module';
 import { loggerConfig } from './logging/logger.config';
 import { MetricsModule } from './metrics/metrics.module';
+import { RaizController } from './raiz.controller';
 import { SimulacionModule } from './simulacion/simulacion.module';
 import { TareasModule } from './tareas/tareas.module';
 
@@ -16,5 +17,6 @@ import { TareasModule } from './tareas/tareas.module';
     TareasModule,
     SimulacionModule,
   ],
+  controllers: [RaizController],
 })
 export class AppModule {}
