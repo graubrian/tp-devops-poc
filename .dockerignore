@@ -1,0 +1,25 @@
+# dependencias y builds locales: se generan dentro de la imagen
+node_modules
+dist
+coverage
+
+# git, CI y editores
+.git
+.github
+.vscode
+.idea
+.DS_Store
+
+# secretos y logs
+.env
+.env.*
+!.env.example
+*.log
+
+# docker y docs no hacen falta dentro de la imagen
+Dockerfile
+docker-compose.yml
+.dockerignore
+makefile
+*.md
+docs
