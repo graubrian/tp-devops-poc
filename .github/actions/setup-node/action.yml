@@ -1,0 +1,14 @@
+name: Preparar Node
+description: Instala Node con caché de npm y las dependencias del proyecto
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version-file: .nvmrc
+        cache: npm
+
+    - name: Instalar dependencias
+      shell: bash
+      run: npm ci

@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  # el workflow de release lo reutiliza antes de publicar la imagen
+  workflow_call:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# si llega un push nuevo al mismo PR, se cancela la corrida anterior
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-node
+      - run: npm run lint:check
+
+  unit:
+    name: Tests unitarios
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-node
+      - run: npm test -- --ci
+
+  e2e:
+    name: Tests e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-node
+      - run: npm run test:e2e -- --ci
+
+  build:
+    name: Build
+    needs: [lint, unit, e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-node
+      - run: npm run build
