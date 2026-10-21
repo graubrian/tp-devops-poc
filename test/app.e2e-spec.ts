@@ -64,4 +64,14 @@ describe('API (e2e)', () => {
   it('devuelve 404 si la tarea no existe', () => {
     return request(app.getHttpServer()).get('/tareas/9999').expect(404);
   });
+
+  it('expone métricas de Prometheus por ruta', async () => {
+    await request(app.getHttpServer()).get('/tareas/9999');
+    const res = await request(app.getHttpServer()).get('/metrics').expect(200);
+
+    expect(res.text).toContain('http_requests_total');
+    expect(res.text).toContain('route="/tareas/:id"');
+    expect(res.text).toContain('status_code="404"');
+    expect(res.text).toContain('http_request_duration_seconds_bucket');
+  });
 });
