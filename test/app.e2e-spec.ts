@@ -36,6 +36,13 @@ describe('API (e2e)', () => {
       });
   });
 
+  it('redirige la raíz a la documentación', () => {
+    return request(app.getHttpServer())
+      .get('/')
+      .expect(302)
+      .expect('Location', '/docs');
+  });
+
   it('expone la documentación de Swagger', async () => {
     await request(app.getHttpServer()).get('/docs').expect(200);
     const res = await request(app.getHttpServer())
