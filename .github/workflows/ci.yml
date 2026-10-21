@@ -1,11 +1,9 @@
 name: CI
 
 on:
-  # el workflow de release lo reutiliza antes de publicar la imagen
+  # en main no corre solo: lo llama el workflow de release antes de publicar
   workflow_call:
   pull_request:
-    branches: [main]
-  push:
     branches: [main]
 
 # si llega un push nuevo al mismo PR, se cancela la corrida anterior
