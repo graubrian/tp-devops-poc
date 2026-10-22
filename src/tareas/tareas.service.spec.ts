@@ -16,7 +16,7 @@ describe('TareasService', () => {
     const t1 = service.create({ titulo: 'Primera' });
     const t2 = service.create({ titulo: 'Segunda' });
 
-    expect(t1.id).toBe(1);
+    expect(t1.id).toBe(99);
     expect(t2.id).toBe(2);
     expect(t1.completada).toBe(false);
     expect(service.findAll()).toHaveLength(2);
