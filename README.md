@@ -275,7 +275,225 @@ Feedback: el CI de un PR tarda unos 2 minutos y el resultado aparece en el mismo
 
 ---
 
-## 6. Estructura del repositorio
+## 6. Configuración técnica
+
+Esta sección explica **cómo está armada cada pieza**: qué archivo la configura, qué herramienta usa y cómo se conecta con las demás.
+
+### 6.1 GitHub Actions
+
+| Archivo | Qué hace |
+|---|---|
+| [`.github/actions/setup-node/action.yml`](.github/actions/setup-node/action.yml) | Acción **compuesta** reutilizable: `actions/setup-node@v4` con `node-version-file: .nvmrc` y `cache: npm`, y después `npm ci`. Todos los jobs de Node la usan, así la versión de Node se define en un solo lugar. |
+| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Pipeline de **integración**. Ver el detalle abajo. |
+| [`.github/workflows/release.yml`](.github/workflows/release.yml) | Pipeline de **entrega**. Ver el detalle abajo. |
+| [`.releaserc.json`](.releaserc.json) | Configuración de semantic-release: rama `main`, tags `v${version}` y plugins `commit-analyzer`, `release-notes-generator` y `github`. Este último crea la GitHub Release y tiene desactivados los comentarios en PRs. |
+| [`.nvmrc`](.nvmrc) | Versión de Node (`24`) que usan el CI, la acción compuesta y los desarrolladores. |
+
+**`ci.yml`**
+- **Disparadores:**
+  - `pull_request` hacia `main`.
+  - `workflow_call`, para que el release lo reutilice.
+- **Jobs:**
+  - `Lint` (`npm run lint:check`), `Tests unitarios` (`npm test -- --ci`) y `Tests e2e` (`npm run test:e2e -- --ci`) corren en paralelo.
+  - `Build` tiene `needs: [lint, unit, e2e]`. Construye la imagen de producción con `docker/setup-buildx-action` y `docker/build-push-action` (`target: prod`, `push: false`, caché `type=gha`).
+- **Concurrencia:** `group: ci-${{ github.workflow }}-${{ github.ref }}` con `cancel-in-progress: true`. Un push nuevo al PR cancela la corrida anterior. El nombre del workflow en el grupo evita que el CI del release y el de un PR se cancelen entre sí.
+- **Permisos:** `contents: read`, el mínimo necesario.
+
+**`release.yml`**
+
+Se dispara con `push` a `main` (o a mano con `workflow_dispatch`) y tiene `concurrency: release` sin cancelación, así nunca se interrumpe una publicación a medias.
+
+```
+ci (uses: ./.github/workflows/ci.yml)
+  └─ version   cycjimmy/semantic-release-action@v4 · permisos contents: write
+       └─ docker    (solo si se publicó versión) login + metadata + build-push a Docker Hub
+            └─ deploy    environment: production · curl al Deploy Hook de Render
+```
+
+- **`version`:**
+  - Hace checkout con `fetch-depth: 0`, porque semantic-release necesita todo el historial y los tags.
+  - Expone `new_release_published` y `new_release_version` como outputs del job.
+- **`docker`:**
+  - `docker/metadata-action@v5` genera los tags `X.Y.Z` y `X.Y` (`type=semver`, `flavor: latest=false`).
+  - `docker/build-push-action@v6` publica la imagen con `build-args: APP_VERSION=X.Y.Z`. Esa versión queda dentro de la imagen y aparece en los logs y en las métricas.
+- **`deploy`** arma la URL de la imagen y llama al hook:
+  ```bash
+  IMG_URL=$(jq -rn --arg v "$IMAGEN:$VERSION" '$v|@uri')
+  curl --fail --silent --show-error -X POST "${HOOK}&imgURL=${IMG_URL}"
+  ```
+  - `imgURL` le indica a Render qué imagen exacta desplegar.
+  - Si el secreto no existe, el job termina con un warning y no falla.
+
+**Secretos y variables** (Settings → Secrets and variables → Actions)
+
+| Nombre | Tipo | Uso |
+|---|---|---|
+| `DOCKERHUB_USERNAME` | Variable | Usuario de Docker Hub. Es variable y no secreto para que no se enmascare en los logs ni en los tags. |
+| `DOCKERHUB_TOKEN` | Secret | Personal access token de Docker Hub (Read & Write) para `docker/login-action` |
+| `RENDER_DEPLOY_HOOK_URL` | Secret | URL privada del Deploy Hook del servicio en Render |
+| `GITHUB_TOKEN` | Automático | Lo usa semantic-release para crear el tag y la GitHub Release |
+
+Los `run:` nunca interpolan datos que vengan del evento (títulos de PR, mensajes de commit). Los valores pasan por `env:` para evitar inyección de comandos.
+
+### 6.2 Configuración del repositorio (hecha con `gh` CLI)
+
+```bash
+# Solo squash merge, con el título del PR como mensaje; borrar la rama al mergear
+gh api -X PATCH repos/graubrian/tp-devops-poc \
+  -F allow_squash_merge=true -F allow_merge_commit=false -F allow_rebase_merge=false \
+  -F delete_branch_on_merge=true -f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=BLANK
+```
+
+**Ruleset `proteger-main`** (`POST repos/{owner}/{repo}/rulesets`), aplicado a la rama por defecto:
+- `deletion`: no se puede borrar la rama.
+- `non_fast_forward`: no se permite force push.
+- `pull_request`: todo cambio entra por PR, con `allowed_merge_methods: ["squash"]` y 0 aprobaciones obligatorias.
+- `required_status_checks`: exige `Lint`, `Tests unitarios`, `Tests e2e` y `Build`, todos de GitHub Actions (`integration_id: 15368`), con `strict_required_status_checks_policy: true` (la rama tiene que estar al día con `main`).
+
+### 6.3 Contenedor y despliegue
+
+- **Dockerfile:** explicado en la sección 3.1. El `HEALTHCHECK` ejecuta `wget -qO- http://127.0.0.1:3000/health`.
+- **Render** (Web Service de tipo *Existing Image*, plan Free):
+  - Imagen: `docker.io/briangrau/tp-devops-poc:<versión>`.
+  - Health Check Path: `/health`.
+  - Variables de entorno: las de la tabla 6.8.
+  - El Deploy Hook (Settings → Deploy Hook) se guarda como secreto en GitHub.
+- **Aprendizaje:** el hook con `imgURL` despliega esa imagen una vez, pero **no cambia la imagen configurada** del servicio. Si Render redeploya por un cambio de variables, usa la imagen configurada. Por eso hay que mantener Settings → Image URL en la última versión.
+
+### 6.4 Métricas: cómo se exponen y cómo se consumen
+
+**Librería:** [`prom-client`](https://github.com/siimon/prom-client), que genera el formato de texto de Prometheus. Archivos en `src/metrics/`:
+
+| Archivo | Responsabilidad |
+|---|---|
+| `metrics.service.ts` | Crea un `Registry` propio y define las métricas. Agrega labels por defecto (`app`, `env`, `version`) y activa `collectDefaultMetrics` (CPU, memoria, event loop, GC). |
+| `metrics.middleware.ts` | Middleware de Nest aplicado a todas las rutas (`forRoutes('{*splat}')`). Mide cada request con `process.hrtime.bigint()` y, en `res.on('finish')`, registra el método, la ruta y el status. |
+| `metrics.controller.ts` | `GET /metrics`: devuelve `registry.metrics()` con el `Content-Type` de Prometheus y valida el token. |
+| `metrics.module.ts` | Módulo global que registra todo lo anterior. |
+
+```ts
+// metrics.service.ts
+new Counter({ name: 'http_requests_total', labelNames: ['method', 'route', 'status_code'] });
+new Histogram({
+  name: 'http_request_duration_seconds',
+  labelNames: ['method', 'route', 'status_code'],
+  buckets: [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
+});
+```
+
+- **Cardinalidad:**
+  - El label `route` usa el **patrón** de la ruta (`/tareas/:id`), no la URL real. Así un id nuevo no crea una serie nueva.
+  - Las rutas inexistentes se agrupan como `route="no_encontrada"`.
+  - `/metrics` no se mide a sí misma.
+- **Autenticación de `/metrics`:** si existe la variable `METRICS_TOKEN`, el endpoint exige el header `Authorization: Bearer <token>` y, si no coincide, responde **401**. Sin la variable queda abierto (útil en local).
+  ```ts
+  const token = process.env.METRICS_TOKEN;
+  if (token && authorization !== `Bearer ${token}`) throw new UnauthorizedException();
+  ```
+- **Quién las consume:**
+  - En Grafana Cloud se configura la integración **Metrics Endpoint** (Connections → Add new connection) con la URL `https://tp-devops-poc.onrender.com/metrics`, intervalo de 1 minuto y autenticación **Bearer** con el mismo `METRICS_TOKEN`.
+  - Grafana hace *pull* cada minuto y guarda las series en el data source Prometheus del stack (`grafanacloud-<stack>-prom`).
+  - Ese scrape externo también evita que la instancia Free de Render se duerma.
+
+### 6.5 Logs: formato y envío a Loki
+
+**Librerías:**
+- [`nestjs-pino`](https://github.com/iamolegga/nestjs-pino): integra pino con Nest y loguea cada request con `pino-http`.
+- [`pino`](https://getpino.io): el logger, que escribe JSON.
+- [`pino-loki`](https://github.com/Julien-R44/pino-loki): un stream de pino que envía los logs a Grafana Loki por HTTP.
+
+Todo se configura en [`src/logging/logger.config.ts`](src/logging/logger.config.ts) y se registra en `app.module.ts` con `LoggerModule.forRoot(loggerConfig())`. `main.ts` reemplaza el logger de Nest con `app.useLogger(app.get(Logger))`.
+
+**Formato:**
+- `timestamp` en ISO, `level` como texto y `messageKey: 'message'`.
+- Campos base: `app`, `env` y `version`.
+- Por cada request, `customSuccessObject` y `customErrorObject` agregan `method`, `path`, `status_code` y `duration_ms`.
+- `customLogLevel`: 5xx → `error`, 4xx → `warn`, el resto → `info`.
+- `serializers` descarta `req` y `res` para que **nunca se logueen headers**, que pueden traer tokens.
+- `autoLogging.ignore` excluye `/metrics`, porque Grafana lo llama cada minuto.
+
+```json
+{"level":"warn","timestamp":"2026-10-22T03:04:15.214Z","app":"tp-devops-api","env":"production",
+ "version":"1.0.1","method":"GET","path":"/tareas/99","status_code":404,"duration_ms":2,"message":"GET /tareas/99 404"}
+```
+
+**Envío a Loki (push):**
+- `pino.multistream` escribe cada log en dos destinos:
+  - **stdout**: siempre. Es lo que se ve en los Logs de Render y en `docker logs`.
+  - **pino-loki**: solo si existe `LOKI_HOST`.
+```ts
+pinoLoki({
+  host: process.env.LOKI_HOST,                 // https://logs-prod-XXX.grafana.net
+  basicAuth: { username: process.env.LOKI_USER, password: process.env.LOKI_TOKEN },
+  labels: { app: 'tp-devops-api', env: process.env.APP_ENV },
+  levelMap: { info: 'info', warn: 'warning', error: 'error', ... },  // label "level" en Loki
+  batching: { interval: 5 },                   // agrupa y envía cada 5 segundos
+  silenceErrors: true,                         // si Loki no responde, la API no se cae
+})
+```
+- **Cómo se envían:** pino-loki hace `POST {LOKI_HOST}/loki/api/v1/push` con **Basic Auth**:
+  - Usuario: el número de instancia de Loki (Cloud Portal → stack → Loki → Details).
+  - Password: un token de una **access policy con scope `logs:write`**. El token de solo lectura del data source no sirve y devuelve `401 invalid scope`.
+- **Cómo se consultan:** en Grafana se filtra por los labels `app`, `env` y `level`, y `| json` permite filtrar por campos del log:
+  ```
+  {app="tp-devops-api", env="production"} | json | status_code >= 500
+  ```
+
+### 6.6 Health check
+
+- **Implementación:**
+  - [`src/health/health.controller.ts`](src/health/health.controller.ts) usa `@nestjs/terminus`, con `HealthCheckService` y `MemoryHealthIndicator.checkHeap('memoria_heap', 300 MB)`.
+  - Responde `{"status":"ok","info":{"memoria_heap":{"status":"up"}}}`, o **503** si el heap pasa los 300 MB (Render Free tiene 512 MB).
+- **Quién lo usa:** el `HEALTHCHECK` del Dockerfile y el Health Check Path de Render.
+- **Solo chequeos internos:** depender de un sitio externo haría que su caída marque como caído a nuestro servicio.
+
+### 6.7 Simulador de carga
+
+- **`SimuladorCargaService`** ([`src/simulacion/simulador-carga.service.ts`](src/simulacion/simulador-carga.service.ts)) usa `@nestjs/schedule` con `@Interval(5000)`.
+  - En cada tick calcula una cantidad de requests: una onda senoidal de ~10 minutos, con ruido y un 5% de chance de un pico ×3.
+  - Reparte esas requests al azar dentro de los 5 segundos.
+  - Hace `fetch` a `http://127.0.0.1:$PORT`, así pasan por el middleware de métricas y por el logger igual que el tráfico real.
+  - Mezcla de acciones ponderadas: GET, POST y PATCH válidos, POST inválidos (400), ids inexistentes (404), DELETE y llamadas a `/simulacion/inestable`.
+- **`GET /simulacion/inestable`** ([`simulacion.controller.ts`](src/simulacion/simulacion.controller.ts)) simula una dependencia externa:
+  - El 10% de las llamadas tarda 0.8–2.3 s.
+  - Falla con 500 o 503 con la probabilidad que indique `SIMULADOR_TASA_ERROR`.
+- Se activa con `SIMULADOR_ACTIVO=true`. En tests y en local está apagado por defecto.
+
+### 6.8 Variables de entorno
+
+| Variable | Dónde | Para qué |
+|---|---|---|
+| `PORT` | Render (`3000`) | Puerto HTTP |
+| `APP_ENV` | Render (`production`) | Label `env` en logs y métricas |
+| `APP_VERSION` | Imagen (build-arg del release) | Label `version` y campo de los logs |
+| `LOG_LEVEL` | Render (`info`) | Nivel mínimo de log |
+| `SIMULADOR_ACTIVO` | Render (`true`) | Prende el cron de carga |
+| `SIMULADOR_TASA_ERROR` | Render (`0.05`; `1` en el experimento) | Probabilidad de 5xx en `/simulacion/inestable` |
+| `LOKI_HOST`, `LOKI_USER`, `LOKI_TOKEN` | Render | Envío de logs a Grafana Loki |
+| `METRICS_TOKEN` | Render y Grafana (Bearer) | Protege `/metrics` |
+
+Ningún secreto está en el repo ni dentro de la imagen. Están en Render, en GitHub Secrets y en Grafana. [`.env.example`](.env.example) lista las variables vacías como referencia.
+
+### 6.9 Grafana: dashboard y alerta
+
+- **Dashboard "TP DevOps — Golden Signals":** armado a mano, sin plantillas. Tiene 13 paneles en 5 filas (Resumen, Tráfico y errores, Latencia, Saturación, Logs). Queries principales:
+
+| Panel | Query (PromQL / LogQL) |
+|---|---|
+| Tráfico | `sum(rate(http_requests_total{app="tp-devops-api", env="production"}[$__rate_interval]))` |
+| Errores 5xx (%) | `(sum(rate(http_requests_total{…, status_code=~"5.."}[$__rate_interval])) / sum(rate(http_requests_total{…}[$__rate_interval]))) * 100` |
+| Latencia p95 (ms) | `histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{…}[$__rate_interval]))) * 1000` |
+| Versión en producción | `count by (version) (http_requests_total{…})` |
+| Errores 5xx (logs) | `{app="tp-devops-api", env="production"} \| json \| status_code >= 500` |
+
+- **Alerta "Errores 5xx altos"** (Alerts & IRM → Alert rules):
+  - Query: la misma tasa de 5xx con ventana fija `[5m]`.
+  - Condición: `IS ABOVE 5`.
+  - Evaluación cada `1m`, con *pending period* `2m`.
+  - Sin datos: estado `Normal`.
+  - Contact point `mail-tp` (Email), con links al dashboard y al panel.
+
+## 7. Estructura del repositorio
 
 ```
 src/
