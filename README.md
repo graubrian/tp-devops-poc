@@ -212,14 +212,31 @@ Feedback: el CI de un PR tarda unos 2 minutos y el resultado aparece en el mismo
 #### Experimento 2: la API empieza a devolver errores 5xx (monitoreo y alerta)
 
 - **Qué hicimos:** en Render cambiamos `SIMULADOR_TASA_ERROR` de `0.05` a `1`. El endpoint `/simulacion/inestable`, que simula una dependencia externa, pasó a fallar siempre con 500/503.
-- **Cómo reaccionó el sistema:**
-  1. En el dashboard, *Errores 5xx* subió del ~0.5% habitual a más del 10% y se puso **rojo**. *Errores por minuto* mostró las barras de 500/503 y el panel de logs se llenó de líneas `level: error`.
-  2. La alerta pasó de **Normal** a **Pending** y después a **Firing** (2 min de pending period).
-  3. Llegó un mail **[FIRING] Errores 5xx altos** con el link al panel.
-  4. Al volver la variable a `0.05`, la alerta pasó a **Resolved** y llegó el mail correspondiente.
+- **Cómo reaccionó el sistema** (22/10, hora Argentina):
+
+| Hora | Evento | Señal |
+|---|---|---|
+| 17:24 | Render reinicia la app con `SIMULADOR_TASA_ERROR=1` | — |
+| 17:25 | Empiezan las respuestas 500/503 en `/simulacion/inestable` | **Log**: líneas `level: error` en Loki |
+| 17:28:40 | La tasa de 5xx (ventana de 5 min) cruza el umbral de 5% | **Métrica**: panel *Errores 5xx* pasa de ~0.5% a ~10% |
+| 17:28:40 → 17:30:50 | La regla queda en **Pending** (pending period de 2 min, evita falsas alarmas) | **Alerta** |
+| 17:30:50 | La regla pasa a **Firing** con valor `A = 10.05%` | **Alerta** |
+| 17:31 | Llega el mail **[FIRING:1] Errores 5xx altos**, con links al dashboard y al panel | **Notificación** |
+
+- **Tiempo de detección:** unos **2 min desde que se cruza el umbral** hasta el aviso. Unos 6 min desde el cambio, porque la ventana de 5 min de `rate()` suaviza el comienzo.
+- **Cierre:** al volver la variable a `0.05`, la tasa bajó, la regla volvió a **Normal** y Grafana mandó la notificación de resuelto.
 
 ![Dashboard durante la falla](docs/img/dashboard-falla.png)
-![Alerta disparada](docs/img/alerta-firing.png)
+
+*Dashboard durante la falla:*
+- *Errores 5xx* en 9.97% (amarillo).
+- *Errores por minuto* con las barras de 500/503 creciendo.
+- *Latencia p95 por ruta* muestra que `/simulacion/inestable` es la ruta lenta.
+- El panel de logs lleno de líneas `ERROR`.
+
+![Regla de alerta en Firing](docs/img/alerta-firing.png)
+
+![Mail recibido](docs/img/alerta-email.png)
 
 #### Fallas reales que el sistema hizo visibles (aprendizaje)
 
