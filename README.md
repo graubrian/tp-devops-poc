@@ -335,20 +335,21 @@ ci (uses: ./.github/workflows/ci.yml)
 
 Los `run:` nunca interpolan datos que vengan del evento (títulos de PR, mensajes de commit). Los valores pasan por `env:` para evitar inyección de comandos.
 
-### 6.2 Configuración del repositorio (hecha con `gh` CLI)
+### 6.2 Configuración del repositorio
 
-```bash
-# Solo squash merge, con el título del PR como mensaje; borrar la rama al mergear
-gh api -X PATCH repos/graubrian/tp-devops-poc \
-  -F allow_squash_merge=true -F allow_merge_commit=false -F allow_rebase_merge=false \
-  -F delete_branch_on_merge=true -f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=BLANK
-```
+**Opciones de merge** (Settings → General → Pull Requests):
+- Solo está habilitado **Squash merging**: cada PR entra a `main` como un único commit.
+- El mensaje del commit es el **título del PR**, sin cuerpo. Como los títulos siguen Conventional Commits, el historial de `main` también los sigue.
+- **Automatically delete head branches**: la rama se borra sola después del merge.
+- **Update branch** está habilitado, para traer los cambios de `main` a un PR atrasado.
 
-**Ruleset `proteger-main`** (`POST repos/{owner}/{repo}/rulesets`), aplicado a la rama por defecto:
-- `deletion`: no se puede borrar la rama.
-- `non_fast_forward`: no se permite force push.
-- `pull_request`: todo cambio entra por PR, con `allowed_merge_methods: ["squash"]` y 0 aprobaciones obligatorias.
-- `required_status_checks`: exige `Lint`, `Tests unitarios`, `Tests e2e` y `Build`, todos de GitHub Actions (`integration_id: 15368`), con `strict_required_status_checks_policy: true` (la rama tiene que estar al día con `main`).
+**Protección de `main`** (Settings → Rules → Ruleset `proteger-main`, aplicado a la rama por defecto):
+- **Sin borrado:** la rama no se puede eliminar.
+- **Sin force push:** no se puede reescribir el historial.
+- **Pull Request obligatorio:** ningún cambio entra con un push directo, ni siquiera del dueño del repo. El único método de merge permitido es squash. No exige aprobaciones, porque el trabajo es individual.
+- **Checks obligatorios:**
+  - `Lint`, `Tests unitarios`, `Tests e2e` y `Build`, y solo cuentan si vienen de GitHub Actions.
+  - Además, la rama tiene que estar actualizada con `main` antes de mergear. Así lo que se probó es exactamente lo que se integra.
 
 ### 6.3 Contenedor y despliegue
 
