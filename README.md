@@ -54,25 +54,32 @@ Variables de entorno: ver [`.env.example`](.env.example).
 ### Diagrama de flujo
 
 ```mermaid
-flowchart TD
-    dev([git push<br/>rama feature]) --> pr[Pull Request<br/>a main]
-    pr --> ci{CI<br/>GitHub Actions}
-    ci -->|Lint| l[ESLint]
-    ci -->|Tests unitarios| u[Jest]
-    ci -->|Tests e2e| e[Jest + Supertest]
-    l & u & e --> b[Build imagen Docker]
-    b -->|algo falla| stop[🛑 PR bloqueado<br/>Andon Cord]
-    b -->|todo verde| merge[Squash merge<br/>a main]
-    merge --> rel[Release workflow]
-    rel --> ci2[CI otra vez<br/>workflow_call]
-    ci2 --> sr[semantic-release<br/>tag vX.Y.Z]
-    sr --> hub[(Docker Hub<br/>tp-devops-poc:X.Y.Z)]
-    hub --> hook[Deploy Hook<br/>imgURL=...:X.Y.Z]
-    hook --> render[Render<br/>producción]
-    render -->|logs push| loki[(Grafana Loki)]
-    render -->|/metrics pull| prom[(Grafana Prometheus)]
-    loki & prom --> dash[Dashboard<br/>Golden Signals]
-    prom --> alert[Alerta 5xx<br/>mail]
+flowchart TB
+    subgraph INT["① Integración — en cada Pull Request"]
+        direction LR
+        dev([git push<br/>rama feature]) --> pr[Pull Request<br/>a main]
+        pr --> checks["CI en paralelo<br/>Lint · Tests unitarios · Tests e2e"]
+        checks --> build[Build<br/>imagen Docker]
+        build -->|todo verde| merge[Squash merge<br/>a main]
+        checks -->|algo falla| stop[🛑 Merge bloqueado<br/>Andon Cord]
+    end
+    subgraph ENT["② Entrega — en cada push a main"]
+        direction LR
+        ci2[CI otra vez<br/>workflow_call] --> sr[semantic-release<br/>tag vX.Y.Z]
+        sr --> hub[(Docker Hub<br/>tp-devops-poc:X.Y.Z)]
+        hub --> hook[Deploy Hook<br/>imgURL=…:X.Y.Z]
+        hook --> render[Render<br/>producción]
+    end
+    subgraph OPE["③ Operación — observabilidad"]
+        direction LR
+        app[API en Render] -->|logs push| loki[(Grafana Loki)]
+        app -->|/metrics pull| prom[(Prometheus)]
+        loki --> dash[Dashboard<br/>Golden Signals]
+        prom --> dash
+        prom --> alert[Alerta 5xx<br/>→ mail]
+    end
+    INT -->|merge| ENT
+    ENT -->|deploy| OPE
 ```
 
 **Del merge a producción:** unos **2 min 20 s**, sin pasos manuales. Ejemplo real con v1.0.1: merge 03:54:08 → deploy pedido 03:56:24 (UTC).
