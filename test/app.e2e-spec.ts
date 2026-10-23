@@ -36,6 +36,17 @@ describe('API (e2e)', () => {
       });
   });
 
+  it('GET /info devuelve la versión y el entorno', () => {
+    return request(app.getHttpServer())
+      .get('/info')
+      .expect(200)
+      .expect((res) => {
+        const body = res.body as { app: string; version: string };
+        expect(body.app).toBe('tp-devops-api');
+        expect(body.version).toBeDefined();
+      });
+  });
+
   it('redirige la raíz a la documentación', () => {
     return request(app.getHttpServer())
       .get('/')
